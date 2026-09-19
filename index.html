@@ -2965,6 +2965,7 @@ body:has(#homeView:not(.hidden)) .home-main-area .home-cal-body span{
 
         <div class="transport-actions">
           <button id="transportSave" class="transport-primary" type="button">SAČUVAJ RUTU</button>
+          <button id="transportExport" class="transport-primary" type="button">IZVEZI RUTU</button>
           <button id="transportClear" class="transport-secondary" type="button">OBRIŠI</button>
         </div>
         <div id="transportStatus" class="transport-status"></div>
@@ -6962,8 +6963,8 @@ document.addEventListener('DOMContentLoaded',()=>{
 (function(){
   const STORE='input_transport_history_v1';
   const RATE='input_transport_rate_v1';
-  let map=null, routeLayer=null, startMarker=null, endMarker=null;
-  let startPlace=null, endPlace=null, oneKm=0;
+  let map=null, routeLayer=null, routeCasing=null, startMarker=null, endMarker=null, baseLayer=null;
+  let startPlace=null, endPlace=null, oneKm=0, routeGeometry=null;
   const $=id=>document.getElementById(id);
   const euro=n=>(Number(n)||0).toLocaleString('sr-RS',{minimumFractionDigits:2,maximumFractionDigits:2})+' €';
   const km=n=>(Number(n)||0).toLocaleString('sr-RS',{minimumFractionDigits:1,maximumFractionDigits:1})+' km';
@@ -6988,8 +6989,9 @@ document.addEventListener('DOMContentLoaded',()=>{
   function initMap(){
     if(map || !window.L || !$('transportMap')) return;
     map=L.map('transportMap',{zoomControl:true}).setView([44.0165,21.0059],7);
-    L.maplibreGL({
-      style:'https://tiles.openfreemap.org/styles/positron'
+    baseLayer=L.maplibreGL({
+      style:'https://tiles.openfreemap.org/styles/positron',
+      maplibreOptions:{preserveDrawingBuffer:true}
     }).addTo(map);
   }
 
@@ -6997,10 +6999,12 @@ document.addEventListener('DOMContentLoaded',()=>{
     initMap();
     if(!map)return;
     if(routeLayer){map.removeLayer(routeLayer);routeLayer=null}
+    if(routeCasing){map.removeLayer(routeCasing);routeCasing=null}
     if(startMarker){map.removeLayer(startMarker);startMarker=null}
     if(endMarker){map.removeLayer(endMarker);endMarker=null}
-    if(startPlace)startMarker=L.marker([startPlace.lat,startPlace.lon]).addTo(map).bindPopup('Polazna tačka');
-    if(endPlace)endMarker=L.marker([endPlace.lat,endPlace.lon]).addTo(map).bindPopup('Krajnja tačka');
+    const mkIcon=(letter,bg)=>L.divIcon({className:'transport-route-marker',html:`<div style="width:34px;height:34px;border-radius:50%;background:${bg};color:#fff;border:3px solid #fff;box-shadow:0 2px 9px rgba(0,0,0,.28);display:flex;align-items:center;justify-content:center;font:800 15px Segoe UI,Arial">${letter}</div>`,iconSize:[34,34],iconAnchor:[17,17]});
+    if(startPlace)startMarker=L.marker([startPlace.lat,startPlace.lon],{icon:mkIcon('A','#18864b')}).addTo(map).bindPopup(`<b>POLAZAK</b><br>${esc(startPlace.name)}`);
+    if(endPlace)endMarker=L.marker([endPlace.lat,endPlace.lon],{icon:mkIcon('B','#d63b3b')}).addTo(map).bindPopup(`<b>ODREDIŠTE</b><br>${esc(endPlace.name)}`);
   }
 
   async function calculateRoute(){
@@ -7014,10 +7018,13 @@ document.addEventListener('DOMContentLoaded',()=>{
       const data=await res.json();
       if(!data.routes || !data.routes[0])throw new Error('route');
       oneKm=data.routes[0].distance/1000;
+      routeGeometry=data.routes[0].geometry||null;
       updateTotals();
-      if(map && data.routes[0].geometry){
-        routeLayer=L.geoJSON(data.routes[0].geometry,{style:{color:'#0b6ca8',weight:5,opacity:.85}}).addTo(map);
-        map.fitBounds(routeLayer.getBounds(),{padding:[28,28]});
+      if(map && routeGeometry){
+        routeCasing=L.geoJSON(routeGeometry,{style:{color:'#ffffff',weight:10,opacity:.96,lineCap:'round',lineJoin:'round'}}).addTo(map);
+        routeLayer=L.geoJSON(routeGeometry,{style:{color:'#1677d2',weight:6,opacity:1,lineCap:'round',lineJoin:'round'}}).addTo(map);
+        map.fitBounds(routeLayer.getBounds(),{padding:[45,45]});
+        startMarker?.bringToFront(); endMarker?.bringToFront();
       }
       status('Ruta je izračunata.');
     }catch(e){
@@ -7138,9 +7145,30 @@ document.addEventListener('DOMContentLoaded',()=>{
     renderHistory();
   }
 
+
+  function routeSvg(){
+    const coords=routeGeometry?.coordinates||[]; if(!coords.length)return '';
+    const xs=coords.map(c=>+c[0]),ys=coords.map(c=>+c[1]);let minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
+    if(maxX===minX)maxX=minX+1;if(maxY===minY)maxY=minY+1;
+    const W=1200,H=650,P=55;
+    const arr=coords.map(c=>[P+(c[0]-minX)/(maxX-minX)*(W-2*P),H-P-(c[1]-minY)/(maxY-minY)*(H-2*P)]);
+    const pts=arr.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' '),a=arr[0],b=arr[arr.length-1];
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;background:#f4f7fa"><rect width="100%" height="100%" fill="#f4f7fa"/><polyline points="${pts}" fill="none" stroke="#fff" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/><polyline points="${pts}" fill="none" stroke="#1677d2" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/><circle cx="${a[0]}" cy="${a[1]}" r="18" fill="#18864b" stroke="#fff" stroke-width="5"/><text x="${a[0]}" y="${a[1]+6}" text-anchor="middle" font-family="Arial" font-size="18" font-weight="700" fill="#fff">A</text><circle cx="${b[0]}" cy="${b[1]}" r="18" fill="#d63b3b" stroke="#fff" stroke-width="5"/><text x="${b[0]}" y="${b[1]+6}" text-anchor="middle" font-family="Arial" font-size="18" font-weight="700" fill="#fff">B</text></svg>`;
+  }
+  function mapSnapshot(){
+    try{const ml=baseLayer&&typeof baseLayer.getMaplibreMap==='function'?baseLayer.getMaplibreMap():null;const c=ml?.getCanvas?.();if(c&&c.width&&c.height){const d=c.toDataURL('image/png');if(d&&d.length>1000)return d}}catch(e){}return '';
+  }
+  function exportRoute(){
+    if(!startPlace||!endPlace||!oneKm||!routeGeometry){status('Prvo izaberi polaznu i krajnju adresu i sačekaj da se ruta izračuna.',true);return}
+    const buyer=($('transportBuyer')?.value||'').trim(),shot=mapSnapshot(),mapHtml=shot?`<img src="${shot}" style="width:100%;height:420px;object-fit:cover;display:block">`:routeSvg();
+    const w=window.open('','_blank');if(!w){status('Browser je blokirao prozor za izvoz. Dozvoli pop-up za ovu stranicu.',true);return}
+    w.document.write(`<!doctype html><html lang="sr"><head><meta charset="utf-8"><title>Transport ruta</title><style>@page{size:A4 landscape;margin:12mm}*{box-sizing:border-box}body{font-family:"Segoe UI",Arial,sans-serif;color:#10233d;margin:0}.sheet{max-width:1120px;margin:auto}.head{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #0b365d;padding-bottom:12px;margin-bottom:18px}h1{margin:0;font-size:26px;color:#0b365d}.sub{font-size:12px;color:#6b7d90;margin-top:4px}.buyer{font-size:14px;font-weight:800;text-align:right}.addresses{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}.addr{border:1px solid #d5e0ea;border-radius:10px;padding:13px 15px;min-height:82px}.addr b{display:block;font-size:11px;color:#63778d;margin-bottom:6px}.addr strong{font-size:14px;line-height:1.45}.map{border:1px solid #cbd8e3;border-radius:12px;overflow:hidden;background:#f4f7fa;margin-bottom:14px}.kms{display:grid;grid-template-columns:1fr 1fr;gap:14px}.km{background:#f3f8fd;border:1px solid #d4e5f4;border-radius:10px;padding:14px;text-align:center}.km b{display:block;font-size:11px;color:#5e748a;margin-bottom:5px}.km strong{font-size:25px;color:#0b365d}.foot{margin-top:10px;font-size:9px;color:#8493a2;text-align:right}</style></head><body><div class="sheet"><div class="head"><div><h1>TRANSPORT – RUTA</h1><div class="sub">Pregled drumske rute</div></div><div class="buyer">${buyer?esc(buyer):''}</div></div><div class="addresses"><div class="addr"><b>A · POLAZNA TAČKA</b><strong>${esc(startPlace.name)}</strong></div><div class="addr"><b>B · KRAJNJA TAČKA</b><strong>${esc(endPlace.name)}</strong></div></div><div class="map">${mapHtml}</div><div class="kms"><div class="km"><b>JEDAN SMER</b><strong>${km(oneKm)}</strong></div><div class="km"><b>OBA SMERA</b><strong>${km(oneKm*2)}</strong></div></div><div class="foot">Cena transporta nije prikazana u izvozu.</div></div><script>window.onload=()=>setTimeout(()=>window.print(),500)<\/script></body></html>`);
+    w.document.close();
+  }
+
   function clearCurrent(){
     $('transportBuyer').value='';$('transportStart').value='';$('transportEnd').value='';
-    startPlace=endPlace=null;oneKm=0;updateTotals();refreshMap();
+    startPlace=endPlace=null;oneKm=0;routeGeometry=null;updateTotals();refreshMap();
     if(map)map.setView([44.0165,21.0059],7);
     status('');
   }
@@ -7152,6 +7180,7 @@ document.addEventListener('DOMContentLoaded',()=>{
     setupAutocomplete('transportEnd','transportEndSuggest','end');
     $('transportRate')?.addEventListener('input',()=>{localStorage.setItem(RATE,$('transportRate').value);updateTotals();renderHistory()});
     $('transportSave')?.addEventListener('click',saveCurrent);
+    $('transportExport')?.addEventListener('click',exportRoute);
     $('transportClear')?.addEventListener('click',clearCurrent);
     $('transportHistoryOpen')?.addEventListener('click',()=>{$('transportHistoryModal').classList.remove('hidden');renderHistory()});
     $('transportHistoryClose')?.addEventListener('click',()=>$('transportHistoryModal').classList.add('hidden'));
